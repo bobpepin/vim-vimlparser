@@ -99,6 +99,9 @@ function s:JavascriptCompiler.compile(node)
   try
   if a:node.type == s:NODE_TOPLEVEL
     return self.compile_toplevel(a:node)
+  elseif a:node.type == s:NODE_EMPTYLINE
+    call self.emptyline()
+    return
   elseif a:node.type == s:NODE_COMMENT
     return self.compile_comment(a:node)
   elseif a:node.type == s:NODE_EXCMD
@@ -284,7 +287,11 @@ function s:JavascriptCompiler.compile_comment(node)
 endfunction
 
 function s:JavascriptCompiler.compile_excmd(node)
-  call self.out('/* do_cmdline_cmd(%s) */', a:node.str)
+  if a:node.str == 'finish'
+    call self.out('return;')
+  else
+    call self.out('ex("%s")', a:node.str)
+  endif
   "throw 'NotImplemented: excmd'
 endfunction
 
@@ -310,14 +317,21 @@ function s:JavascriptCompiler.compile_function(node)
     call self.decindent()
     call self.out('}')
   else
+    call self.out('ex("function %s(%s)\ncall execute(\"duk %s(\" . a:%s . \")\")\nendfunction")', left, join(rlist, ', '), left, join(rlist, ', '))
     call self.out('function %s(%s) {', left, join(rlist, ', '))
     call self.incindent('    ')
+    let argdict = []
+    for arg in rlist
+      call add(argdict, printf('%s: %s', arg, arg))
+    endfor
+    call self.out('var $a = {%s};', join(argdict, ','))
     if va
       call self.out('var a000 = Array.prototype.slice.call(arguments, %d);', len(rlist))
     endif
     call self.compile_body(a:node.body)
     call self.decindent()
     call self.out('}')
+    call self.out('globalThis.%s = %s;', left, left)
   endif
   call self.emptyline()
 endfunction
@@ -561,7 +575,7 @@ function s:JavascriptCompiler.compile_equal(node)
 endfunction
 
 function s:JavascriptCompiler.compile_equalci(node)
-  return printf('viml_equalci(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('%s.toLowerCase() == %s.toLowerCase()', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 function s:JavascriptCompiler.compile_equalcs(node)
@@ -573,7 +587,7 @@ function s:JavascriptCompiler.compile_nequal(node)
 endfunction
 
 function s:JavascriptCompiler.compile_nequalci(node)
-  return printf('!viml_equalci(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('%s.toLowerCase() != %s.toLowerCase()', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 function s:JavascriptCompiler.compile_nequalcs(node)
@@ -629,27 +643,32 @@ function s:JavascriptCompiler.compile_sequalcs(node)
 endfunction
 
 function s:JavascriptCompiler.compile_match(node)
-  return printf('viml_eqreg(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('matchstr(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  if a:node.right.type == s:NODE_STRING && a:node.right.value[0] == "'"
+    return printf('%s.match(/%s/)', self.compile(a:node.left), a:node.right.value[1:-2])
+  else
+    return printf('%s.match(new Regexp(%s))', self.compile(a:node.left), self.compile(a:node.right))
+  endif
 endfunction
 
 function s:JavascriptCompiler.compile_matchci(node)
-  return printf('viml_eqregq(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('matchstr(%s.toLowerCase(), %s.toLowerCase())', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 function s:JavascriptCompiler.compile_matchcs(node)
-  return printf('viml_eqregh(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('matchstr(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 function s:JavascriptCompiler.compile_nomatch(node)
-  return printf('!viml_eqreg(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('!matchstr(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 function s:JavascriptCompiler.compile_nomatchci(node)
-  return printf('!viml_eqregq(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('!matchstr(%s.toLowerCase(), %s.toLowerCase())', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 function s:JavascriptCompiler.compile_nomatchcs(node)
-  return printf('!viml_eqregh(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
+  return printf('!matchstr(%s, %s)', self.compile(a:node.left), self.compile(a:node.right))
 endfunction
 
 " TODO
@@ -746,7 +765,7 @@ function s:JavascriptCompiler.compile_call(node)
     let n = p.parse()
     return printf('%s.map((function(vval) { return %s; }).bind(this))', rlist[0], self.compile(n))
   elseif left == 'call' && rlist[0][0] =~ '[''"]'
-    return printf('viml_%s.apply(null, %s)', rlist[0][1:-2], rlist[1])
+    return printf('%s.apply(null, %s)', rlist[0][1:-2], rlist[1])
   endif
   let isnew = 0
   if left =~ '\.new$'
@@ -754,7 +773,7 @@ function s:JavascriptCompiler.compile_call(node)
     let isnew = 1
   endif
   if index(s:viml_builtin_functions, left) != -1
-    let left = printf('viml_%s', left)
+    let left = printf('%s', left)
   endif
   if isnew
     return printf('new %s(%s)', left, join(rlist, ', '))
@@ -795,16 +814,16 @@ function s:JavascriptCompiler.compile_dict(node)
 endfunction
 
 function s:JavascriptCompiler.compile_option(node)
-  throw 'NotImplemented: option'
+  return printf('$o.%s', a:node.value[1:])
 endfunction
 
 function s:JavascriptCompiler.compile_identifier(node)
   let name = a:node.value
-  if name == 'a:000'
-    let name = 'a000'
-  elseif name == 'v:val'
-    let name = 'vval'
-  elseif name =~ '^[sa]:'
+  if name =~ '^[bwtgsva]:$'
+    let name = '$' . name[0]
+  elseif name =~ '^[bwtgsva]:'
+    let name = '$' . name[0] . '.' . name[2:]
+  elseif name =~ '^l:'
     let name = name[2:]
   elseif name == 'self'
     let name = 'this'
@@ -817,11 +836,11 @@ function s:JavascriptCompiler.compile_curlyname(node)
 endfunction
 
 function s:JavascriptCompiler.compile_env(node)
-  throw 'NotImplemented: env'
+  return printf('env.%s', a:node.value[1:])
 endfunction
 
 function s:JavascriptCompiler.compile_reg(node)
-  throw 'NotImplemented: reg'
+  return printf('reg.%s', a:node.value[1:])
 endfunction
 
 function s:JavascriptCompiler.compile_op1(node, op)
@@ -856,20 +875,7 @@ function! s:convert(in, out) abort
     let p = s:VimLParser.new()
     let c = s:JavascriptCompiler.new()
     let lines = c.compile(p.parse(r))
-    " unlet lines[0 : index(lines, 'var NIL = [];') - 1]
-    let tail = [
-      \   'if (require.main === module) {',
-      \   '  main();',
-      \   '}',
-      \   'else {',
-      \   '  module.exports = {',
-      \   '    VimLParser: VimLParser,',
-      \   '    StringReader: StringReader,',
-      \   '    Compiler: Compiler',
-      \   '  };',
-      \   '}',
-      \ ]
-    call writefile(head + lines + tail, a:out)
+    call writefile(['(function ($s) {'] + lines + ['})({})'], a:out)
   catch
     throw substitute(v:throwpoint, '\.\.\zs\d\+', '\=s:numtoname(submatch(0))', 'g') . "\n" . v:exception
   endtry

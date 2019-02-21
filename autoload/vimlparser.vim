@@ -137,6 +137,7 @@ let s:NODE_REG = 89
 let s:NODE_CURLYNAMEPART = 90
 let s:NODE_CURLYNAMEEXPR = 91
 let s:NODE_LAMBDA = 92
+let s:NODE_EMPTYLINE = 93
 
 let s:TOKEN_EOF = 1
 let s:TOKEN_EOL = 2
@@ -511,6 +512,7 @@ function! s:VimLParser.parse_one_cmd()
   endif
   call self.reader.skip_white_and_colon()
   if self.reader.peekn(1) ==# ''
+    call self.parse_emptyline()
     call self.reader.get()
     return
   endif
@@ -1046,6 +1048,13 @@ function! s:VimLParser.read_cmdarg()
     let r .= c
   endwhile
   return r
+endfunction
+
+function! s:VimLParser.parse_emptyline()
+  let npos = self.reader.getpos()
+  let node = s:Node(s:NODE_EMPTYLINE)
+  let node.pos = npos
+  call self.add_node(node)
 endfunction
 
 function! s:VimLParser.parse_comment()
